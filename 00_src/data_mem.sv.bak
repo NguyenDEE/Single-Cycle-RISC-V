@@ -1,0 +1,74 @@
+module data_mem
+(
+    // SDRAM MODEL INTERFACE
+    input logic      in_CLK,
+    input logic      in_CSn,              // CHIP SELECT (active low)
+    input logic     in_write_en,         // 1 = Write, 0 = Read
+    input logic     in_CASn,             // Column Address Strobe (active low)
+    input logic      in_RASn,             // Row Address Strobe (active low)
+    input logic [1:0] in_bank_select,      // Bank selection (2-bit)
+    input logic [12:0] in_sdram_addr,      // Row address (13-bit)
+    input logic [31:0] in_sdram_write_data,
+    output logic [31:0] out_sdram_read_data,
+    output logic  o_stall
+);
+
+    // Parameters for SDRAM configuration
+    parameter DATA   = 32;
+    parameter ROW    = 256;         // 8KiB = 2048 words (32-bit)
+    
+    // Internal signals
+    wire  READ_CAS, WRITE_CAS;
+    
+    reg [12:0] registered_row = 13'b0;      // Registered row address
+    reg [1:0]  registered_bank_sel = 2'b0;  // Registered bank selection
+    reg registered_write_cas = 1'b0;
+    
+    // Simplified bank memory (only 2 banks)
+    reg [DATA-1:0] bank0 [0:ROW-1];
+    reg [DATA-1:0] bank1 [0:ROW-1];
+    logic cnt_stall;
+    always_ff @(posedge in_CLK) begin
+        if (READ_CAS) begin
+            if(cnt_stall == 0) begin
+                o_stall = 1'b1;
+                cnt_stall = 1'b1;
+            end
+            else begin
+            cnt_stall = 1'b0;
+            o_stall = 1'b0;
+            end
+        end
+        else o_stall = 1'b0;
+    end
+
+    localparam BANK0 = 2'b10;
+    localparam BANK1 = 2'b11;
+
+    // Control logic for activating rows and performing read/write
+    assign READ_CAS = ~in_CSn && ~in_RASn && in_CASn && ~in_write_en;  // Read when in_write_en = 0
+    assign WRITE_CAS = ~in_CSn && ~in_RASn && in_CASn && in_write_en;  // Write when in_write_en = 1
+    assign registered_row = in_sdram_addr[12:2];     // Capture row address
+    assign registered_bank_sel = in_bank_select;  // Capture bank selectio
+    // Sequential logic for row and bank selection
+    always_ff @(posedge in_CLK) begin
+        if (!in_CSn) begin
+            if (WRITE_CAS) begin
+            // Write operation (in_write_en = 1)  
+            case (registered_bank_sel)
+                BANK0: bank0[registered_row] <= in_sdram_write_data;
+                BANK1: bank1[registered_row] <= in_sdram_write_data;
+            endcase
+        end
+        else begin
+            // Read operation (in_write_en = 0)
+            case (registered_bank_sel)
+                BANK0: out_sdram_read_data <= bank0[registered_row];
+                BANK1: out_sdram_read_data <= bank1[registered_row];
+                
+            endcase
+        end
+    end
+end
+endmodule
+
